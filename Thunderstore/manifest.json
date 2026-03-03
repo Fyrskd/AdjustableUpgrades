@@ -1,6 +1,6 @@
 {
     "name": "AdjustableUpgrades",
-    "version_number": "1.0.1",
+    "version_number": "1.0.2",
     "description": "Adjust your upgrade levels freely within your purchased cap. Press F2 to open the in-game UI with +/- buttons, sliders, and quick actions (Max All, Clear All, Randomize).",
     "website_url": "https://github.com/Fyrskd/AdjustableUpgrades",
     "dependencies": [

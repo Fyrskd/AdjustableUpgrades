@@ -14,7 +14,7 @@ namespace AdjustableUpgrades
     {
         private const string MOD_GUID = "Hazuki.REPO.AdjustableUpgrades";
         private const string MOD_NAME = "Adjustable Upgrades";
-        private const string MOD_VERSION = "1.0.1";
+        private const string MOD_VERSION = "1.0.3";
 
         private readonly Harmony harmony = new Harmony(MOD_GUID);
 

@@ -2,6 +2,7 @@ using HarmonyLib;
 using Photon.Pun;
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Reflection;
 
@@ -19,6 +20,17 @@ namespace AdjustableUpgrades.Core
         private static readonly object capLock = new object();
         private static readonly System.Random random = new System.Random();
 
+        // File path for persisting caps
+        private static string capsFilePath;
+
+        /// <summary>
+        /// Set the file path for saving caps. Called from Plugin.Awake.
+        /// </summary>
+        public static void SetSavePath(string configDir)
+        {
+            capsFilePath = Path.Combine(configDir, "AdjustableUpgrades_caps.txt");
+        }
+
         /// <summary>
         /// Initialize caps from current StatsManager data. Called on StatsManager.Start.
         /// </summary>
@@ -31,6 +43,9 @@ namespace AdjustableUpgrades.Core
                 ModdedKeys.Clear();
 
                 if (StatsManager.instance == null) return;
+
+                // Load previously saved caps
+                Dictionary<string, int> savedCaps = LoadCapsFromFile();
 
                 // Determine vanilla fields
                 HashSet<string> vanillaFields = typeof(StatsManager)
@@ -51,12 +66,67 @@ namespace AdjustableUpgrades.Core
                     else
                         ModdedKeys.Add(kvp.Key);
 
-                    // Set cap to current level
+                    // Current in-game level
                     int currentLevel = kvp.Value.ContainsKey(localSteamID) ? kvp.Value[localSteamID] : 0;
-                    upgradeCaps[kvp.Key] = currentLevel;
+
+                    // Cap = max(saved cap, current level)
+                    // This prevents cap loss when level was lowered before exit
+                    int savedCap = savedCaps.ContainsKey(kvp.Key) ? savedCaps[kvp.Key] : 0;
+                    upgradeCaps[kvp.Key] = Math.Max(savedCap, currentLevel);
                 }
 
-                Plugin.Log.LogInfo($"UpgradeCapManager initialized: {VanillaKeys.Count} vanilla, {ModdedKeys.Count} modded upgrade keys. Caps set from current levels.");
+                // Also restore caps for keys that exist in save but not in current stats
+                // (edge case: modded upgrades that were uninstalled)
+                // Skip this to avoid phantom keys
+
+                Plugin.Log.LogInfo($"UpgradeCapManager initialized: {VanillaKeys.Count} vanilla, {ModdedKeys.Count} modded. Caps loaded (saved caps applied).");
+
+                // Restore levels to cap values (undo any lowered levels from last session)
+                RestoreLevelsToCaps(localSteamID);
+
+                // Save the merged caps
+                SaveCapsToFile();
+            }
+        }
+
+        /// <summary>
+        /// After loading, restore all upgrade levels back to their cap values.
+        /// This reverses any level reductions from the previous session.
+        /// </summary>
+        private static void RestoreLevelsToCaps(string localSteamID)
+        {
+            if (PunManager.instance == null) return;
+            PhotonView punView = PunManager.instance.GetComponent<PhotonView>();
+            if (punView == null) return;
+
+            foreach (var kvp in upgradeCaps)
+            {
+                string key = kvp.Key;
+                int cap = kvp.Value;
+
+                // Get current level
+                int currentLevel = 0;
+                if (StatsManager.instance.dictionaryOfDictionaries.TryGetValue(key, out var dict))
+                {
+                    currentLevel = dict.ContainsKey(localSteamID) ? dict[localSteamID] : 0;
+                }
+
+                if (currentLevel < cap)
+                {
+                    // Restore to cap
+                    bool isVanilla = VanillaKeys.Contains(key);
+                    if (isVanilla)
+                    {
+                        string commandName = key.Substring("playerUpgrade".Length);
+                        int delta = cap - currentLevel;
+                        punView.RPC("TesterUpgradeCommandRPC", RpcTarget.All, localSteamID, commandName, delta);
+                    }
+                    else
+                    {
+                        punView.RPC("UpdateStatRPC", RpcTarget.All, key, localSteamID, cap);
+                    }
+                    Plugin.Log.LogInfo($"Restored {key}: {currentLevel} -> {cap}");
+                }
             }
         }
 
@@ -72,6 +142,8 @@ namespace AdjustableUpgrades.Core
 
                 upgradeCaps[key] += amount;
                 Plugin.Log.LogInfo($"Cap increased: {key} -> {upgradeCaps[key]}");
+
+                SaveCapsToFile();
             }
         }
 
@@ -212,6 +284,61 @@ namespace AdjustableUpgrades.Core
             if (key.StartsWith("player"))
                 return key.Substring("player".Length);
             return key;
+        }
+
+        // ---- Persistence ----
+
+        private static void SaveCapsToFile()
+        {
+            if (string.IsNullOrEmpty(capsFilePath)) return;
+
+            try
+            {
+                List<string> lines = new List<string>();
+                foreach (var kvp in upgradeCaps)
+                {
+                    lines.Add($"{kvp.Key}={kvp.Value}");
+                }
+                File.WriteAllLines(capsFilePath, lines);
+            }
+            catch (Exception ex)
+            {
+                Plugin.Log.LogWarning($"Failed to save caps: {ex.Message}");
+            }
+        }
+
+        private static Dictionary<string, int> LoadCapsFromFile()
+        {
+            Dictionary<string, int> saved = new Dictionary<string, int>();
+            if (string.IsNullOrEmpty(capsFilePath)) return saved;
+            if (!File.Exists(capsFilePath)) return saved;
+
+            try
+            {
+                string[] lines = File.ReadAllLines(capsFilePath);
+                foreach (string line in lines)
+                {
+                    string trimmed = line.Trim();
+                    if (string.IsNullOrEmpty(trimmed)) continue;
+
+                    int eqIdx = trimmed.IndexOf('=');
+                    if (eqIdx <= 0) continue;
+
+                    string key = trimmed.Substring(0, eqIdx);
+                    string valStr = trimmed.Substring(eqIdx + 1);
+                    if (int.TryParse(valStr, out int val))
+                    {
+                        saved[key] = val;
+                    }
+                }
+                Plugin.Log.LogInfo($"Loaded {saved.Count} saved caps from file.");
+            }
+            catch (Exception ex)
+            {
+                Plugin.Log.LogWarning($"Failed to load caps: {ex.Message}");
+            }
+
+            return saved;
         }
 
         private static string GetLocalSteamID()

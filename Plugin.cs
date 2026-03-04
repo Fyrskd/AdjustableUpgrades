@@ -49,6 +49,7 @@ namespace AdjustableUpgrades
             ((Component)this).gameObject.transform.parent = null;
             ((UnityEngine.Object)((Component)this).gameObject).hideFlags = (HideFlags)61;
 
+            UpgradeCapManager.SetSavePath(Paths.ConfigPath);
             ModConfig.Init(Config);
             harmony.PatchAll();
 
